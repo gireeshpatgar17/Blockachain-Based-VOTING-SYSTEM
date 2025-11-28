@@ -1,6 +1,5 @@
 // server.js
 // Backend for OTP (Twilio Verify) + static frontend serving
-
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
