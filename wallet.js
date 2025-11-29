@@ -2,7 +2,6 @@
 import { Wallet } from "ethers";
 import fs from "fs";
 
-
 // 1. Generate a new random wallet
 const wallet = Wallet.createRandom();
 

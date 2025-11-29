@@ -12,4 +12,3 @@ wallet.encrypt(password).then((keystoreJson) => {
     // Save keystoreJson as file for voter to download
     console.log("Keystore File:", keystoreJson);
 });
-

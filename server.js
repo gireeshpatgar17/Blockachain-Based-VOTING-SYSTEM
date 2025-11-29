@@ -1,15 +1,18 @@
 // server.js
 // Backend for OTP (Twilio Verify) + static frontend serving
+
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { ethers } from 'ethers';
+import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.static('weights'));
 
 // For ES modules (to get __dirname)
 const __filename = fileURLToPath(import.meta.url);
@@ -92,6 +95,14 @@ app.post('/fund', async (req, res) => {
     const provider = new ethers.JsonRpcProvider(rpcUrl);
     const admin = new ethers.Wallet(adminPk, provider);
 
+    // Initialize Supabase server client using service role key (server-only)
+    const SUPABASE_URL = process.env.SUPABASE_URL;
+    const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    let serverSupabase = null;
+    if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+      serverSupabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    }
+
     let tx;
     try {
       tx = await admin.sendTransaction({
@@ -114,6 +125,17 @@ app.post('/fund', async (req, res) => {
         tx: tx.hash,
         error: 'Transaction sent but not confirmed: ' + (waitErr.message || waitErr)
       });
+    }
+    // If we have a Supabase server client, mark voter as funded for audit/UX
+    try {
+      if (serverSupabase) {
+        await serverSupabase
+          .from('voters')
+          .update({ is_funded: true, funded_tx: tx.hash, funded_at: new Date().toISOString() })
+          .eq('metamask_address', to);
+      }
+    } catch (dbErr) {
+      console.warn('Failed to update voter funding status in Supabase:', dbErr?.message || dbErr);
     }
 
     return res.json({
