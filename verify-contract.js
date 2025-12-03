@@ -1,6 +1,5 @@
 // Quick script to verify contract deployment
 // Run: node verify-contract.js
-
 import { ethers } from 'ethers';
 
 const CONTRACT_ADDRESS = "0xd9145CCE52D386f254917e481eB44e9943F39138";
