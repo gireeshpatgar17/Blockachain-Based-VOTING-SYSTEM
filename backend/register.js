@@ -1,5 +1,4 @@
 // ✅ backend/register.js
-
 import fetch from "node-fetch"; // Force working fetch for Node 22
 globalThis.fetch = fetch; // Make it global so Supabase uses it
 
@@ -19,7 +18,8 @@ app.use(
   cors({
     origin: "*",
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    // allow the admin-secret header used by the admin UI and other common headers
+    allowedHeaders: ["Content-Type", "Authorization", "x-admin-secret", "x-requested-with"],
   })
 );
 app.use(bodyParser.json({ limit: "2mb" }));
@@ -136,6 +136,29 @@ app.post("/fund", async (req, res) => {
       });
     }
 
+    // Try to mark the voter as funded in Supabase (service role client is available)
+    try {
+      const updateData = {
+        is_funded: true,
+        funded_tx: tx.hash,
+        funded_at: new Date().toISOString(),
+      };
+
+      console.log('🔔 Attempting to update voter record for metamask_address=', to);
+      const { data: dbData, error: dbError } = await supabase
+        .from('voters')
+        .update(updateData)
+        .eq('metamask_address', to);
+
+      if (dbError) {
+        console.warn('⚠️ Supabase update returned error:', dbError);
+      } else {
+        console.log('✅ Supabase update result:', dbData?.length ? 'updated' : 'no rows matched');
+      }
+    } catch (dbErr) {
+      console.warn('⚠️ Failed to update Supabase voter record:', dbErr?.message || dbErr);
+    }
+
     return res.json({
       ok: true,
       funded: true,
@@ -216,7 +239,27 @@ app.post("/api/registerVoter", async (req, res) => {
   console.log("📩 DOB from req.body:", req.body?.dob);
 
   try {
-    const { aadhaar_no, name, wallet_address, dob, mobile_no, email } = req.body || {};
+    // Server-side: enforce election registration window (if configured)
+    try {
+      const { data: setting } = await supabase
+        .from('election_settings')
+        .select('start_time,end_time')
+        .limit(1)
+        .maybeSingle();
+      if (setting && setting.start_time && setting.end_time) {
+        const now = new Date();
+        const start = new Date(setting.start_time);
+        const end = new Date(setting.end_time);
+        if (!(now >= start && now <= end)) {
+          return res.status(403).json({ ok: false, error: 'REGISTRATION_CLOSED', message: 'Registration is not open at this time.' });
+        }
+      }
+    } catch (winErr) {
+      console.warn('Could not read election window:', winErr?.message || winErr);
+      // If window cannot be read, allow registration to avoid accidental lockout
+    }
+
+    const { aadhaar_no, name, wallet_address, dob, mobile_no, email, face_descriptor } = req.body || {};
 
     if (!aadhaar_no || !name || !wallet_address) {
       return res.status(400).json({
@@ -264,7 +307,7 @@ app.post("/api/registerVoter", async (req, res) => {
       mobile_no: mobile_no || "0000000000", // Default value if not provided
       email: email || null,
       is_registered: true, // Mark as registered after successful registration
-      // Fingerprint fields removed as requested
+      face_descriptor: face_descriptor || null, // Store face descriptor as JSONB array
     };
     
     console.log("🧾 Attempting to insert/update voter record with data:", JSON.stringify(insertData, null, 2));
@@ -295,6 +338,7 @@ app.post("/api/registerVoter", async (req, res) => {
           mobile_no: mobile_no || "0000000000",
           email: email || null,
           is_registered: true, // Mark as registered after successful registration
+          face_descriptor: face_descriptor || null, // Update face descriptor
         })
         .eq("aadhaar_no", aadhaar_no)
         .select()
@@ -343,6 +387,64 @@ app.post("/api/registerVoter", async (req, res) => {
   }
 });
 
+// GET current election window
+app.get('/api/election-window', async (req, res) => {
+  try {
+    const { data: setting, error } = await supabase
+      .from('election_settings')
+      .select('start_time,end_time')
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    // include server 'now' and an 'open' boolean to help clients avoid clock-skew problems
+    const now = new Date();
+    let open = false;
+    if (setting && setting.start_time && setting.end_time) {
+      const s = new Date(setting.start_time);
+      const e = new Date(setting.end_time);
+      open = now >= s && now <= e;
+    }
+    return res.json({ ok: true, data: setting || null, now: now.toISOString(), open });
+  } catch (e) {
+    console.error('Failed to fetch election window:', e?.message || e);
+    return res.status(500).json({ ok: false, error: 'SERVER_ERROR', message: String(e?.message || e) });
+  }
+});
+
+// POST set election window (admin)
+app.post('/api/admin/set-election', async (req, res) => {
+  try {
+    // If ADMIN_API_SECRET is set, require it via header x-admin-secret
+    const ADMIN_API_SECRET = process.env.ADMIN_API_SECRET || null;
+    if (ADMIN_API_SECRET) {
+      const provided = req.get('x-admin-secret');
+      if (!provided || provided !== ADMIN_API_SECRET) {
+        return res.status(401).json({ ok: false, error: 'UNAUTHORIZED', message: 'Missing or invalid admin secret' });
+      }
+    }
+
+    const { start_time, end_time, label } = req.body || {};
+    if (!start_time || !end_time) return res.status(400).json({ ok: false, error: 'BAD_REQUEST', message: 'Missing start_time or end_time' });
+    const s = new Date(start_time);
+    const e = new Date(end_time);
+    if (!(s < e)) return res.status(400).json({ ok: false, error: 'BAD_REQUEST', message: 'start_time must be before end_time' });
+
+    // Upsert into election_settings (single row). Try to update existing row or insert.
+    const { data: existing } = await supabase.from('election_settings').select('id').limit(1).maybeSingle();
+    if (existing && existing.id) {
+      const { data, error } = await supabase.from('election_settings').update({ start_time, end_time, updated_at: new Date().toISOString(), label: label || 'main' }).eq('id', existing.id).select().single();
+      if (error) throw error;
+      return res.json({ ok: true, data });
+    } else {
+      const { data, error } = await supabase.from('election_settings').insert([{ start_time, end_time, label: label || 'main' }]).select().single();
+      if (error) throw error;
+      return res.json({ ok: true, data });
+    }
+  } catch (e) {
+    console.error('Failed to set election window:', e?.message || e);
+    return res.status(500).json({ ok: false, error: 'SERVER_ERROR', message: String(e?.message || e) });
+  }
+});
 
 // ---------- SERVER START ----------
 const PORT = process.env.BACKEND_PORT ? Number(process.env.BACKEND_PORT) : 4000;
