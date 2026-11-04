@@ -63,10 +63,6 @@ npm start
 
 The default static development server serves `html/index.html` on port 3000. Contract interaction also requires a compatible wallet and network.
 
-## Screenshots and demo
-
-No screenshots or hosted demo link are included.
-
 ## Author
 
 **Gireesh Sadanand Patgar** · [GitHub](https://github.com/gireeshpatgar17)
