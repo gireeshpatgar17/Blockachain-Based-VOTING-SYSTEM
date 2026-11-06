@@ -5,7 +5,9 @@ const wallet = ethers.Wallet.createRandom();
 console.log("Public Address:", wallet.address);
 
 // Voter chooses password
-const password = "VoterSecretPassword123";
+// Set KEYSTORE_PASSWORD in the process environment; do not hard-code keystore passwords.
+const password = process.env.KEYSTORE_PASSWORD;
+if (!password) throw new Error("Set KEYSTORE_PASSWORD before generating a keystore.");
 
 // Encrypt private key into keystore JSON
 wallet.encrypt(password).then((keystoreJson) => {
