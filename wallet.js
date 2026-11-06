@@ -6,10 +6,10 @@ import fs from "fs";
 const wallet = Wallet.createRandom();
 
 console.log("✅ Public Address:", wallet.address);
-console.log("✅ Private Key:", wallet.privateKey);
-
 // 2. Encrypt private key with password (Keystore JSON)
-const password = "VoterSecretPassword123";
+// Set KEYSTORE_PASSWORD in the process environment; do not hard-code keystore passwords.
+const password = process.env.KEYSTORE_PASSWORD;
+if (!password) throw new Error("Set KEYSTORE_PASSWORD before generating a keystore.");
 
 const keystoreJson = await wallet.encrypt(password);
 
